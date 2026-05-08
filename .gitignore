@@ -1,0 +1,34 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter / notebook checkpoints
+.ipynb_checkpoints/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
+
+# Generated Python model artifacts
+*.joblib
+*.keras
+
+# Generated feature/debug CSVs
+recording_features.csv
+*recording_features.csv
+
+# TensorFlow temporary exports
+tmp*/
+saved_model/
