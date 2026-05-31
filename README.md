@@ -18,14 +18,19 @@ Classify fan audio into two classes:
 ---
 
 ## Hardware
-Arduino Nano 33 BLE Sense Rev2
-2 small USB computer fans
-Laptop for data collection and training
-USB cable
+- Arduino Nano 33 BLE Sense Rev2
+- 2 small USB computer fans
+- Laptop for data collection and training
+- USB cable
 
 Fan setup:
 - Normal fan: Unmodified fan from the factory
 - Anomaly fan: Fan with a small weight added to one blade
+
+Arduino setup:
+- Board: Arduino Nano 33 BLE Sense Rev2
+- Library: ArduTFLite 1.0.2
+- PDM microphone library
 
 ---
 
@@ -33,7 +38,10 @@ Fan setup:
 
 ```text
 .
+├── requirements.txt
+│
 ├── nano_code/
+│   ├── nano_code.ino
 │   └── fan_anomaly_inference/
 │       ├── fan_anomaly_inference.ino
 │       ├── fan_anomaly_model.h
@@ -50,8 +58,8 @@ Fan setup:
     │
     ├── record_samples.py
     ├── train_baseline.py
-    ├── train_tflite_deployable.py
-    └── requirements.txt
+    ├── train_tflite_features.py
+    └── train_tflite_deployable.py
 ```
 
 ---
@@ -101,14 +109,20 @@ venv\Scripts\activate
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r ..\requirements.txt
 ```
 
 ---
 
 ## Record New Samples
 
-First, upload the data collection sketch to the Arduino Nano.
+First, upload the data collection sketch to the Arduino Nano:
+
+`nano_code/nano_code.ino`
+
+Before recording, check `record_samples.py`.
+The serial port is currently set to `COM7`, but this can change depending on the computer, USB port, and Arduino setup.
+Also change `LABEL` to `normal` or `anomaly` depending on which fan is being recorded.
 
 Then run:
 
@@ -166,6 +180,9 @@ The script creates the files needed by the Arduino sketch:
 `fan_anomaly_model.h`
 `feature_scaler.h`
 
+If the model is retrained, copy the generated header files into:
+`nano_code/fan_anomaly_inference/`
+
 Current deployable model result:
 Accuracy: 80%
 Anomaly recall: 92%
@@ -184,4 +201,4 @@ Make sure these files are in the same folder:
 
 `fan_anomaly_inference.ino`
 `fan_anomaly_model.h`
-`feature_scaler`
+`feature_scaler.h`
