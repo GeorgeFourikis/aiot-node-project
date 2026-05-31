@@ -1,17 +1,12 @@
 #include <PDM.h>
+#include <ArduTFLite.h>
 
 #include "fan_anomaly_model.h"
 #include "feature_scaler.h"
 
-#include <ArduTFLite.h>
-#include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-
 const int SAMPLE_RATE = 16000;
 const int SAMPLE_COUNT = 16000;
-
-const int MODEL_INPUT_SIZE = 36;
+const int MODEL_INPUT_SIZE = FEATURE_COUNT;
 
 short pdmBuffer[512];
 int16_t recording[SAMPLE_COUNT];
@@ -20,14 +15,11 @@ volatile int recordIndex = 0;
 volatile bool isRecording = false;
 volatile bool sampleReady = false;
 
-float features[MODEL_INPUT_SIZE];
+unsigned long recordingStartTime = 0;
 
-const tflite::Model* model = nullptr;
-tflite::MicroInterpreter* interpreter = nullptr;
-TfLiteTensor* input = nullptr;
-TfLiteTensor* output = nullptr;
+float features[FEATURE_COUNT];
 
-constexpr int tensorArenaSize = 24 * 1024;
+constexpr int tensorArenaSize = 32 * 1024;
 alignas(16) uint8_t tensorArena[tensorArenaSize];
 
 void onPDMdata() {
@@ -78,10 +70,6 @@ float computeRmsCentered(const int16_t* data, int start, int count, float mean) 
   return sqrtf(sumSquares / count);
 }
 
-float computeStdCentered(const int16_t* data, int start, int count, float mean) {
-  return computeRmsCentered(data, start, count, mean);
-}
-
 float computePeakToPeak(const int16_t* data, int start, int count) {
   int16_t minValue = data[start];
   int16_t maxValue = data[start];
@@ -128,7 +116,7 @@ void extractFeatures() {
   int featureIndex = 0;
 
   features[featureIndex++] = computeRmsCentered(recording, 0, SAMPLE_COUNT, globalMean);
-  features[featureIndex++] = computeStdCentered(recording, 0, SAMPLE_COUNT, globalMean);
+  features[featureIndex++] = computeRmsCentered(recording, 0, SAMPLE_COUNT, globalMean);
   features[featureIndex++] = computePeakToPeak(recording, 0, SAMPLE_COUNT);
   features[featureIndex++] = computeZeroCrossingsCentered(recording, 0, SAMPLE_COUNT, globalMean);
 
@@ -149,23 +137,23 @@ void runInference() {
   extractFeatures();
 
   for (int i = 0; i < MODEL_INPUT_SIZE; i++) {
-    input->data.f[i] = features[i];
+    modelSetInput(features[i], i);
   }
 
-  TfLiteStatus invokeStatus = interpreter->Invoke();
-
-  if (invokeStatus != kTfLiteOk) {
-    Serial.println("ERROR: Invoke failed");
+  if (!modelRunInference()) {
+    Serial.println("ERROR: modelRunInference failed");
     return;
   }
 
-  float normalScore = output->data.f[0];
-  float anomalyScore = output->data.f[1];
+  float normalScore = modelGetOutput(0);
+  float anomalyScore = modelGetOutput(1);
 
   Serial.print("normal=");
   Serial.print(normalScore, 4);
+
   Serial.print(" anomaly=");
   Serial.print(anomalyScore, 4);
+
   Serial.print(" prediction=");
 
   if (anomalyScore > normalScore) {
@@ -181,6 +169,8 @@ void startRecording() {
   recordIndex = 0;
   sampleReady = false;
   isRecording = true;
+  recordingStartTime = millis();
+
   Serial.println("Recording 1 second...");
 }
 
@@ -188,52 +178,29 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 
   Serial.begin(115200);
-  delay(2000);
+  while (!Serial);
 
   Serial.println("Fan anomaly inference starting...");
 
-  model = tflite::GetModel(fan_anomaly_model);
-
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    Serial.println("ERROR: Model schema version mismatch");
+  if (!modelInit(fan_anomaly_model, tensorArena, tensorArenaSize)) {
+    Serial.println("ERROR: modelInit failed");
     while (true);
   }
 
-  static tflite::MicroMutableOpResolver<4> resolver;
+  Serial.println("Model initialized.");
 
-  resolver.AddFullyConnected();
-  resolver.AddRelu();
-  resolver.AddSoftmax();
+  /*
+    Important:
+    Register the microphone callback BEFORE starting PDM.
+  */
+  PDM.onReceive(onPDMdata);
 
-  static tflite::MicroInterpreter staticInterpreter(
-    model,
-    resolver,
-    tensorArena,
-    tensorArenaSize
-  );
-
-  interpreter = &staticInterpreter;
-
-  TfLiteStatus allocateStatus = interpreter->AllocateTensors();
-
-  if (allocateStatus != kTfLiteOk) {
-    Serial.println("ERROR: AllocateTensors failed");
+  if (!PDM.begin(1, SAMPLE_RATE)) {
+    Serial.println("ERROR: Failed to start PDM microphone");
     while (true);
   }
 
-  input = interpreter->input(0);
-  output = interpreter->output(0);
-
-  Serial.print("Input dims: ");
-  Serial.println(input->dims->data[1]);
-
-PDM.onReceive(onPDMdata);
-
-if (!PDM.begin(1, SAMPLE_RATE)) {
-  Serial.println("ERROR: Failed to start PDM microphone");
-  while (true);
-}
-
+  Serial.println("PDM microphone started.");
   Serial.println("Ready.");
   Serial.println("Send r to record and classify.");
 }
@@ -247,10 +214,24 @@ void loop() {
     }
   }
 
+  if (isRecording && millis() - recordingStartTime > 3000) {
+    isRecording = false;
+
+    Serial.print("ERROR: Recording timeout. Samples captured: ");
+    Serial.println(recordIndex);
+
+    Serial.println("Send r to try again.");
+  }
+
   if (sampleReady) {
     sampleReady = false;
-    Serial.println("Sample ready. Running inference...");
+
+    Serial.print("Sample ready. Samples captured: ");
+    Serial.println(recordIndex);
+
+    Serial.println("Running inference...");
     runInference();
+
     Serial.println("Send r to run again.");
   }
 }
